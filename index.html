@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>The Variable Game</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="crt-overlay" aria-hidden="true"></div>
+    <canvas id="grain-canvas" aria-hidden="true"></canvas>
+    <div class="game-wrapper">
+        <header class="game-header">
+        <div class="header-left">
+            <span class="game-title">THE VARIABLE GAME</span>
+            <span class="game-subtitle">// a python puzzle</span>
+        </div>
+        <div class="header-right">
+            <div class="save-section">
+                <div class="timer-wrap">
+                    <span class="timer-label">MEMORY SYNC</span>
+                    <span id="timer-display" class="timer-value">45</span>
+                    <span class="timer-unit">s</span>
+                </div>
+                <button id="save-btn" class="save-btn">SYNC MEMORY</button>
+            </div>
+        </div>
+        </header>
+        <div class="game-body">
+            <aside class="rules-panel" id="rules-panel">
+                <div class="rules-header">
+                    <span class="rules-title">RULES</span>
+                    <span id="rules-progress" class="rules-progress">0 / 25</span>
+                </div>
+                <ul class="rules-list" id="rules-list"></ul>
+            </aside>
+            <main class="editor-panel">
+                <div class="editor-topbar">
+                    <span class="editor-label">script.py</span>
+                    <span id="line-count-display" class="line-count">Lines: 1</span>
+                </div>
+                <div class="editor-container">
+                    <div id="line-numbers" class="line-numbers">1</div>
+                    <textarea
+                    id="code-editor"
+                    class="code-editor"
+                    spellcheck="false"
+                    autocorrect="off"
+                    autocapitalize="off"
+                    placeholder="# start writing your Python script here..."
+                    ></textarea>
+                </div>
+            </main>
+        </div>
+    </div>
+    <div id="success-srceen" class="success-srceen hidden">
+        <div class="success-inner">
+            <div class="success-blink">■</div>
+            <h1 class="success-title">THE VARIABLE GAME</h1>
+            <div class="success-divider"></div>
+            <p class="success-label">S U C C E S S </p>
+            <p class="success-msg">All 25 rules satisfied. The script compiles</p><br/>You have mastered the variable.</p>
+            <div class="success-divider"></div>
+            <button class="success-restart" onclick="location.reload()">[ PLAY AGAIN ]</button>        </div>
+    </div>
+  <script src="script.js"></script>
+</body>
+</html>
