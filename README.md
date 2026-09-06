@@ -10,7 +10,7 @@
   </p>
 
   <p>
-    <a href="https://jamallyemin.github.io/The-Variable-Game/">Play it live</a> ·
+    <a href="https://jamallyemin.github.io/The-Variable-Game/">Play it live</a>
   </p>
 </div>
 
