@@ -52,7 +52,6 @@ const FirebaseClient = (() => {
     }, { merge: true });
   }
 
-  // Small-scale client-side aggregation — fine for a friend-group leaderboard.
   async function fetchLeaderboard(tab) {
     if (tab === "streak") {
       const snap = await db.collection("streaks").orderBy("winStreak", "desc").limit(50).get();
@@ -143,9 +142,6 @@ const FirebaseClient = (() => {
       startTime: firebase.firestore.FieldValue.serverTimestamp(),
     });
   }
-
-  // Firestore retries this transaction if two players collide, so exactly
-  // one of them ends up as the winner even on a near-simultaneous submit.
   async function submitRaceSolution(code, nickname, elapsedMs) {
     const ref = db.collection("rooms").doc(code);
     await ref.collection("players").doc(uid).update({ done: true });
@@ -166,22 +162,15 @@ const FirebaseClient = (() => {
 
     await ref.collection("players").doc(uid).delete().catch(() => {});
 
+    // only the host is allowed to delete the room doc (see firestore.rules),
+    // so that's the only case worth attempting cleanup for
     try {
       const roomSnap = await ref.get();
-      if (!roomSnap.exists) return;
-
-      // host leaving kills the room for everyone — no room should sit
-      // around marked "started" forever with nobody in it
-      if (roomSnap.data().hostUid === uid) {
+      if (roomSnap.exists && roomSnap.data().hostUid === uid) {
         await deleteRoomAndPlayers(ref);
-        return;
       }
-
-      // otherwise, only clean up if that was the last player left
-      const remaining = await ref.collection("players").get();
-      if (remaining.empty) await deleteRoomAndPlayers(ref);
     } catch (err) {
-      console.error("Room cleanup failed (likely a rules/permissions issue):", err);
+      console.error("Room cleanup failed:", err);
     }
   }
 
