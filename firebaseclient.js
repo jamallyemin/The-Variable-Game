@@ -52,6 +52,7 @@ const FirebaseClient = (() => {
     }, { merge: true });
   }
 
+  // Small-scale client-side aggregation — fine for a friend-group leaderboard.
   async function fetchLeaderboard(tab) {
     if (tab === "streak") {
       const snap = await db.collection("streaks").orderBy("winStreak", "desc").limit(50).get();
@@ -161,7 +162,35 @@ const FirebaseClient = (() => {
 
   async function leaveRoom(code) {
     if (!code) return;
-    await db.collection("rooms").doc(code).collection("players").doc(uid).delete().catch(() => {});
+    const ref = db.collection("rooms").doc(code);
+
+    await ref.collection("players").doc(uid).delete().catch(() => {});
+
+    try {
+      const roomSnap = await ref.get();
+      if (!roomSnap.exists) return;
+
+      // host leaving kills the room for everyone — no room should sit
+      // around marked "started" forever with nobody in it
+      if (roomSnap.data().hostUid === uid) {
+        await deleteRoomAndPlayers(ref);
+        return;
+      }
+
+      // otherwise, only clean up if that was the last player left
+      const remaining = await ref.collection("players").get();
+      if (remaining.empty) await deleteRoomAndPlayers(ref);
+    } catch (err) {
+      console.error("Room cleanup failed (likely a rules/permissions issue):", err);
+    }
+  }
+
+  async function deleteRoomAndPlayers(ref) {
+    const playersSnap = await ref.collection("players").get();
+    const batch = db.batch();
+    playersSnap.docs.forEach((doc) => batch.delete(doc.ref));
+    batch.delete(ref);
+    await batch.commit();
   }
 
   return {
