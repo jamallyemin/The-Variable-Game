@@ -1,0 +1,66 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(uid) { return isSignedIn() && request.auth.uid == uid; }
+    function validNickname(name) {
+      return name is string && name.size() >= 3 && name.size() <= 16
+        && name.matches('^[A-Za-z0-9_-]+$');
+    }
+
+    match /players/{uid} {
+      allow read: if true;
+      allow write: if isOwner(uid) && validNickname(request.resource.data.nickname);
+    }
+
+    match /nicknames/{lower} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && lower == lower.lower()
+        && validNickname(lower)
+        && !exists(/databases/$(database)/documents/nicknames/$(lower));
+      allow update: if isOwner(resource.data.uid);
+      allow delete: if false;
+    }
+
+    match /scores/{id} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.difficulty in ['easy', 'medium', 'hard']
+        && request.resource.data.elapsedMs is number
+        && request.resource.data.elapsedMs > 200
+        && request.resource.data.elapsedMs < 600000;
+      allow update, delete: if false; // leaderboard history is append-only
+    }
+
+    match /streaks/{uid} {
+      allow read: if true;
+      allow write: if isOwner(uid);
+    }
+
+    match /rooms/{code} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.hostUid == request.auth.uid;
+      allow update: if isSignedIn() && (
+        // the host starting the race
+        (resource.data.hostUid == request.auth.uid && request.resource.data.started == true)
+        ||
+        // claiming the win — only if nobody has claimed it yet
+        (resource.data.winnerUid == null && request.resource.data.winnerUid == request.auth.uid)
+      );
+      allow delete: if isSignedIn() && resource.data.hostUid == request.auth.uid;
+
+      match /players/{uid} {
+        allow read: if true;
+        allow create: if isOwner(uid) && validNickname(request.resource.data.nickname);
+        allow update: if isOwner(uid);
+        allow delete: if isOwner(uid)
+          || get(/databases/$(database)/documents/rooms/$(code)).data.hostUid == request.auth.uid;
+      }
+    }
+  }
+}
