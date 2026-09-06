@@ -1,301 +1,407 @@
 (function () {
-'use strict';
+  "use strict";
 
-const editor    = document.getElementById('code-editor');
-const lineNums  = document.getElementById('line-numbers');
-const lineCount = document.getElementById('line-count-display');
-const rulesList = document.getElementById('rules-list');
-const progress  = document.getElementById('rules-progress');
-const timerEl   = document.getElementById('timer-display');
-const saveBtn   = document.getElementById('save-btn');
-const winScreen = document.getElementById('success-srceen');
-
-let shown = 1, secs = 45, dead = false, tick = null, shred = null;
-
-// parser 
-// only cares about name = value lines. skips comments, blanks, anything weird.
-// three formats: number, quoted string, list (inline or split across lines).
-
-function parse(src) {
-    const w = { strings: {}, numbers: {}, lists: {}, variables: {} };
-    const lines = src.replace(/\r/g, '').split('\n');
-    let i = 0;
-
-    while (i < lines.length) {
-        const line = lines[i].trim();
-        if (!line || line[0] === '#') { i++; continue; }
-
-        try {
-            // multi line list
-            let m = line.match(/^([A-Za-z_]\w*)\s*=\s*\[\s*$/);
-            if (m) {
-                const key = m[1], items = [];
-                for (i++; i < lines.length; i++) {
-                    const cur = lines[i].trim();
-                    if (cur === ']' || cur === '],') break;
-                    const q = cur.match(/^["']([^"']*)["']\s*,?$/);
-                    if (q) items.push(q[1]);
-                }
-                set(w, 'list', key, items);
-                i++; continue;
-            }
-
-            // number
-            m = line.match(/^([A-Za-z_]\w*)\s*=\s*(-?\d+(?:\.\d+)?)\s*$/);
-            if (m) { set(w, 'num', m[1], Number(m[2])); i++; continue; }
-
-            // string
-            m = line.match(/^([A-Za-z_]\w*)\s*=\s*["']([^"']*)["']\s*$/);
-            if (m) { set(w, 'str', m[1], m[2]); i++; continue; }
-
-            // inline list
-            m = line.match(/^([A-Za-z_]\w*)\s*=\s*\[(.*)\]\s*$/);
-            if (m) {
-                const items = [], re = /["']([^"']*)["']/g;
-                let h;
-                while ((h = re.exec(m[2]))) items.push(h[1]);
-                set(w, 'list', m[1], items);
-            }
-        } catch (_) {}
-
-        i++;
+  // subtle static noise for the CRT look
+  const grainCanvas = document.getElementById("grain-canvas");
+  const gctx = grainCanvas.getContext("2d");
+  function drawGrain() {
+    grainCanvas.width = window.innerWidth;
+    grainCanvas.height = window.innerHeight;
+    const imgData = gctx.createImageData(grainCanvas.width, grainCanvas.height);
+    for (let i = 0; i < imgData.data.length; i += 4) {
+      const v = Math.random() * 255;
+      imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = v;
+      imgData.data[i + 3] = 255;
     }
-    return w;
-}
+    gctx.putImageData(imgData, 0, 0);
+  }
+  drawGrain();
+  window.addEventListener("resize", drawGrain);
 
-function set(w, type, key, val) {
-    if (type === 'num')  w.numbers[key]  = val;
-    if (type === 'str')  w.strings[key]  = val;
-    if (type === 'list') w.lists[key]    = val;
-    w.variables[key] = val;
-}
+  // screen routing
+  const SCREENS = {
+    menu: "screen-menu", difficulty: "screen-difficulty", host: "screen-host",
+    join: "screen-join", leaderboard: "screen-leaderboard", game: "screen-game",
+  };
+  let currentRoomCode = null;
+  let roomUnsubscribers = [];
 
+  function showScreen(name) {
+    for (const id of Object.values(SCREENS)) document.getElementById(id).classList.add("hidden");
+    document.getElementById(SCREENS[name]).classList.remove("hidden");
+    document.getElementById("success-screen").classList.add("hidden");
+  }
+  window.App = { showScreen }; // bridge for tutorial.js
 
+  // header: nickname + streak display
+  function refreshHeader() {
+    document.getElementById("nickname-display").textContent = PlayerState.getNickname() || "GUEST";
+    const streak = PlayerState.getStreakCache();
+    document.getElementById("streak-count").textContent = streak.daily;
+    document.getElementById("streak-chip").classList.toggle("hot", streak.daily >= 3);
+  }
 
-function prime(n) {
-    if (!Number.isInteger(n) || n < 2) return false;
-    for (let i = 2; i * i <= n; i++) if (n % i === 0) return false;
-    return true;
-}
+  function bumpDailyStreak() {
+    const streak = PlayerState.getStreakCache();
+    const today = new Date().toISOString().slice(0, 10);
+    if (streak.lastPlayDate !== today) {
+      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      streak.daily = streak.lastPlayDate === yesterday ? streak.daily + 1 : 1;
+      streak.lastPlayDate = today;
+      PlayerState.setStreakCache(streak);
+    }
+    refreshHeader();
+    FirebaseClient.updateStreaks({ nickname: PlayerState.getNickname(), daily: streak.daily, win: streak.win }).catch(() => {});
+  }
 
-const flist = w => { const k = Object.keys(w.lists); return k.length ? w.lists[k[0]] : null; };
-const nsum  = w => Object.values(w.numbers).reduce((a, b) => a + b, 0);
+  // nickname onboarding
+  const nicknamePrompt = document.getElementById("nickname-prompt");
+  const nicknameInput = document.getElementById("nickname-input");
+  const nicknameError = document.getElementById("nickname-error");
+  const confirmNicknameBtn = document.getElementById("confirm-nickname-btn");
 
+  async function trySubmitNickname() {
+    const name = nicknameInput.value.trim();
+    nicknameError.textContent = "";
+    if (name.length < 3) return (nicknameError.textContent = "At least 3 characters.");
+    if (!/^[A-Za-z0-9_\-]+$/.test(name)) return (nicknameError.textContent = "Letters, numbers, _ and - only.");
+    if (!looksCleanClientSide(name)) return (nicknameError.textContent = "That name isn't allowed. Try another.");
 
-// s
+    confirmNicknameBtn.disabled = true;
+    confirmNicknameBtn.textContent = "[ CHECKING... ]";
+    const result = await FirebaseClient.claimNickname(name);
+    confirmNicknameBtn.disabled = false;
+    confirmNicknameBtn.textContent = "[ CONFIRM ]";
 
-const rules = [
-    { id:1,  text:'Create at least one variable.',
-      check: w => Object.keys(w.variables).length >= 1 },
+    if (!result.allowed) return (nicknameError.textContent = result.reason);
 
-    { id:2,  text:'Create a string variable.',
-      check: w => Object.keys(w.strings).length >= 1 },
+    PlayerState.setNickname(name);
+    nicknamePrompt.classList.add("hidden");
+    refreshHeader();
+    maybeShowTutorialPrompt();
+  }
+  confirmNicknameBtn.addEventListener("click", trySubmitNickname);
+  nicknameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") trySubmitNickname(); });
 
-    { id:3,  text:'Create a numeric variable.',
-      check: w => Object.keys(w.numbers).length >= 1 },
+  document.getElementById("change-nickname-btn").addEventListener("click", () => {
+    nicknameInput.value = PlayerState.getNickname() || "";
+    nicknamePrompt.classList.remove("hidden");
+  });
 
-    { id:4,  text:'Sum of all numbers must equal 50.',
-      supersededBy:18, check: w => nsum(w) === 50 },
+  // tutorial onboarding
+  const tutorialPrompt = document.getElementById("tutorial-prompt");
+  function maybeShowTutorialPrompt() {
+    if (PlayerState.tutorialDone()) return showScreen("menu");
+    tutorialPrompt.classList.remove("hidden");
+  }
+  document.getElementById("start-tutorial-btn").addEventListener("click", () => {
+    tutorialPrompt.classList.add("hidden");
+    Tutorial.start();
+  });
+  document.getElementById("skip-tutorial-btn").addEventListener("click", () => {
+    tutorialPrompt.classList.add("hidden");
+    PlayerState.markTutorialDone();
+    showScreen("menu");
+  });
+  document.querySelector('[data-action="tutorial"]').addEventListener("click", () => Tutorial.start());
 
-    { id:5,  text:'Create a list variable.',
-      check: w => Object.keys(w.lists).length >= 1 },
+  // first load
+  async function init() {
+    refreshHeader();
+    try {
+      await FirebaseClient.init();
+    } catch (err) {
+      console.error("Firebase failed to initialize — check FIREBASE_CONFIG in config.js.", err);
+    }
+    if (!PlayerState.hasVisited()) {
+      PlayerState.markVisited();
+      nicknamePrompt.classList.remove("hidden");
+    } else if (!PlayerState.getNickname()) {
+      nicknamePrompt.classList.remove("hidden");
+    } else {
+      showScreen("menu");
+    }
+  }
 
-    { id:6,  text:'The list must contain exactly 3 items.',
-      check: w => { const l = flist(w); return !!(l && l.length === 3); } },
-
-    { id:7,  text:'The longest variable name must be exactly 6 letters.',
-      supersededBy:23,
-      check: w => {
-          const ns = Object.keys(w.variables);
-          return ns.length > 0 && Math.max(...ns.map(n => n.length)) === 6;
-      }},
-
-    { id:8,  text:'At least one variable name must contain no vowels.',
-      check: w => Object.keys(w.variables).some(n => !/[aeiou]/i.test(n)) },
-
-
-    { id:9,  text:'The largest number must be prime.',
-      check: w => { const v = Object.values(w.numbers); return v.length > 0 && prime(Math.max(...v)); } },
-
-    { id:10, text:'There must be exactly 2 numeric variables.',
-      check: w => Object.keys(w.numbers).length === 2 },
-
-    { id:11, text:'All list items must be unique.',
-      check: w => { const l = flist(w); return !!(l && new Set(l).size === l.length); } },
-
-    { id:12, text:'The shortest string value must contain the letter "x".',
-      check: w => {
-          const v = Object.values(w.strings);
-          return v.length > 0 && /x/i.test(v.slice().sort((a,b) => a.length - b.length)[0]);
-      }},
-
-    { id:13, text:'Combined length of all string values must equal 12.',
-      check: w => Object.values(w.strings).reduce((t, s) => t + s.length, 0) === 12 },
-
-    { id:14, text:'Every variable name must start with a unique letter.',
-      check: w => {
-          const ns = Object.keys(w.variables);
-          return new Set(ns.map(n => n[0].toLowerCase())).size === ns.length;
-      }},
-
-    { id:15, text:'One number must equal the length of some variable name.',
-      check: w => {
-          const nums = Object.values(w.numbers), names = Object.keys(w.variables);
-          return nums.some(v => names.some(n => n.length === Math.abs(v)));
-      }},
-
-    { id:16, text:'No number or string value may contain the digit 7.',
-      supersededBy:7,
-      check: w => !Object.values(w.numbers).some(n => String(n).includes('7'))
-               && !Object.values(w.strings).some(s => s.includes('7')) },
-
-    { id:17, text:'The largest number must still be prime.',
-      check: w => { const v = Object.values(w.numbers); return v.length > 0 && prime(Math.max(...v)); } },
-
-    { id:18, text:'Sum of all numbers must now equal 75.',
-      check: w => nsum(w) === 75 },
-
-    { id:19, text:'List items must be sorted alphabetically.',
-      check: w => { const l = flist(w); return !!l && l.join('|') === [...l].sort().join('|'); } },
-
-    { id:20, text:'Exactly one string value must be a palindrome.',
-      check: w => Object.values(w.strings)
-                     .filter(s => s.length > 0 && s === [...s].reverse().join('')).length === 1 },
-
-    { id:21, text:'The average of all numbers must equal 37.5.',
-      check: w => { const v = Object.values(w.numbers); return v.length > 0 && nsum(w)/v.length === 37.5; } },
-
-    { id:22, text:'Total variable count must equal exactly 6.',
-      check: w => Object.keys(w.variables).length === 6 },
-
-    { id:23, text:'One variable name must be exactly 8 letters long.',
-      check: w => Object.keys(w.variables).some(n => n.length === 8) },
-
-    { id:24, text:'Total characters across all variable names must equal 30.',
-      check: w => Object.keys(w.variables).reduce((t, n) => t + n.length, 0) === 30 },
-
-
-    { id:25, text:'All active rules must pass simultaneously.', check: () => true }
-];
-
-const live = r => !r.supersededBy || shown < r.supersededBy;
-
-//
-
-function buildRules() {
-    rulesList.innerHTML = '';
-    rules.forEach(r => {
-        const li = document.createElement('li');
-        li.className = 'rule-item';
-        li.id = 'rule-' + r.id;
-        li.innerHTML = '<div class="rule-num">' + r.id + '</div>'
-            + '<div class="rule-body"><div class="rule-text">' + r.text + '</div>'
-            + '<div class="rule-status">LOCKED</div></div>';
-        rulesList.appendChild(li);
+  // menu navigation
+  document.querySelectorAll("[data-action]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const action = el.dataset.action;
+      if (action === "singleplayer") showScreen("difficulty");
+      if (action === "host") showScreen("host");
+      if (action === "join") showScreen("join");
+      if (action === "leaderboard") { showScreen("leaderboard"); loadLeaderboard("easy"); }
+      if (action === "back-to-menu") { teardownGame(); showScreen("menu"); }
     });
-}
+  });
+  document.getElementById("logo-home-btn").addEventListener("click", () => { teardownGame(); showScreen("menu"); });
 
-function updateLines() {
-    const n = editor.value.split('\n').length;
-    lineCount.textContent = 'Lines: ' + n;
-    lineNums.textContent  = Array.from({length: n}, (_, i) => i + 1).join('\n');
-}
+  document.addEventListener("keydown", (e) => {
+    if (!document.getElementById(SCREENS.menu).classList.contains("hidden")) {
+      if (e.key === "1") document.querySelector('[data-action="singleplayer"]').click();
+      if (e.key === "2") document.querySelector('[data-action="host"]').click();
+      if (e.key === "3") document.querySelector('[data-action="join"]').click();
+      if (e.key === "4") document.querySelector('[data-action="leaderboard"]').click();
+    }
+  });
 
+  // difficulty select (singleplayer path)
+  document.querySelectorAll("#screen-difficulty .diff-card").forEach((card) => {
+    card.addEventListener("click", () => startGame(card.dataset.diff, "singleplayer"));
+  });
 
+  // host lobby
+  document.querySelectorAll("#host-pre-code .diff-card").forEach((card) => {
+    card.addEventListener("click", async () => {
+      const diff = card.dataset.diff;
+      const code = await FirebaseClient.hostRoom(diff, PlayerState.getNickname());
+      currentRoomCode = code;
+      document.getElementById("host-pre-code").classList.add("hidden");
+      document.getElementById("host-post-code").classList.remove("hidden");
+      document.getElementById("room-code-value").textContent = code.split("").join(" ");
+      subscribeToRoom(code, diff);
+    });
+  });
+  document.getElementById("start-race-btn").addEventListener("click", () => {
+    if (currentRoomCode) FirebaseClient.startRace(currentRoomCode, hostDifficulty);
+  });
 
-function run() {
+  let hostDifficulty = "easy";
+  function subscribeToRoom(code, difficulty) {
+    hostDifficulty = difficulty;
+    roomUnsubscribers.forEach((u) => u());
+    roomUnsubscribers = [];
+
+    roomUnsubscribers.push(FirebaseClient.listenRoomPlayers(code, (players) => {
+      const hostList = document.getElementById("host-player-list");
+      hostList.innerHTML = players.map((p) => `<li>${p.nickname}<span class="status">READY</span></li>`).join("");
+      document.getElementById("start-race-btn").disabled = players.length < 2;
+
+      const joinList = document.getElementById("join-player-list");
+      if (joinList) {
+        joinList.innerHTML = players.map((p) => `<li>${p.nickname}</li>`).join("");
+        document.getElementById("join-waiting").classList.remove("hidden");
+      }
+      renderOpponents(players);
+    }));
+
+    roomUnsubscribers.push(FirebaseClient.listenRoomState(code, (state) => {
+      if (state.started && state.task && task?.id !== state.task.id) {
+        startGame(state.difficulty, "multiplayer", TaskEngine.rebuildTask(state.task));
+      }
+      if (state.winnerUid) {
+        const iWon = state.winnerUid === FirebaseClient.getUid();
+        showSuccess({ won: iWon, elapsedMs: state.winnerElapsedMs, isMultiplayer: true, opponentName: state.winnerNickname });
+      }
+    }));
+  }
+
+  // join lobby
+  document.getElementById("join-submit-btn").addEventListener("click", async () => {
+    const code = document.getElementById("join-code-input").value.trim().toUpperCase();
+    const errEl = document.getElementById("join-error");
+    errEl.textContent = "";
+    if (code.length !== 4) return (errEl.textContent = "Enter the 4-character room code.");
+    try {
+      const roomData = await FirebaseClient.joinRoom(code, PlayerState.getNickname());
+      currentRoomCode = code;
+      subscribeToRoom(code, roomData.difficulty);
+    } catch (err) {
+      errEl.textContent = err.message || "Couldn't join that room.";
+    }
+  });
+
+  function renderOpponents(players) {
+    const strip = document.getElementById("opponents-strip");
+    if (players.length < 2) return strip.classList.add("hidden");
+    strip.classList.remove("hidden");
+    strip.innerHTML = players
+      .filter((p) => p.token !== FirebaseClient.getUid())
+      .map((p) => `<span class="opponent-chip ${p.done ? "done" : ""}">${p.nickname}${p.done ? " ✓" : "…"}</span>`)
+      .join("");
+  }
+
+  // leaderboard
+  document.querySelectorAll(".lb-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".lb-tab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      loadLeaderboard(tab.dataset.lbtab);
+    });
+  });
+  async function loadLeaderboard(tab) {
+    const body = document.getElementById("lb-body");
+    body.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted);">loading...</td></tr>`;
+    try {
+      const rows = await FirebaseClient.fetchLeaderboard(tab);
+      if (!rows.length) return (body.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted);">no entries yet — be the first</td></tr>`);
+      let html = "";
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const rankClass = i === 0 ? "top1" : i === 1 ? "top2" : i === 2 ? "top3" : "";
+        html += `
+          <tr class="${r.token === FirebaseClient.getUid() ? "you" : ""}">
+            <td class="lb-rank ${rankClass}">${i + 1}</td>
+            <td>${r.nickname}</td><td>${r.wins}</td><td>${r.bestTime ?? "—"}</td><td>${r.winStreak}</td>
+          </tr>`;
+      }
+      body.innerHTML = html;
+    } catch (err) {
+      console.error(err);
+      body.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted);">couldn't load — check your Firebase setup in config.js</td></tr>`;
+    }
+  }
+
+  // game loop (single + multi share this)
+  const editor = document.getElementById("code-editor");
+  const lineNums = document.getElementById("line-numbers");
+  const rulesList = document.getElementById("rules-list");
+  const progressEl = document.getElementById("rules-progress");
+  const timerEl = document.getElementById("timer-display");
+  const saveBtn = document.getElementById("save-btn");
+  const modeLabel = document.getElementById("game-mode-label");
+
+  let task = null, mode = "singleplayer", difficulty = "easy";
+  let secs = 45, dead = false, hadShred = false, tick = null, shred = null, startedAt = 0;
+
+  function buildRulesUI() {
+    let html = "";
+    for (let i = 0; i < task.rules.length; i++) {
+      html += `
+        <li class="rule-item visible" id="rule-${i}">
+          <div class="rule-num">${i + 1}</div>
+          <div class="rule-body"><div class="rule-text">${task.rules[i].text}</div><div class="rule-status">✗ NOT MET</div></div>
+        </li>`;
+    }
+    rulesList.innerHTML = html;
+    progressEl.textContent = `TASK · 0 / ${task.rules.length}`;
+  }
+
+  function updateLines() {
+    const n = editor.value.split("\n").length;
+    let out = "";
+    for (let i = 1; i <= n; i++) out += (i > 1 ? "\n" : "") + i;
+    lineNums.textContent = out;
+  }
+
+  function run() {
     if (dead) return;
-    const w = parse(editor.value);
+    const vars = CodeParser.parseCode(editor.value);
     let ok = 0;
-
-    rules.forEach(r => {
-        const el = document.getElementById('rule-' + r.id);
-        if (!el || r.id > shown) return;
-        el.classList.add('visible');
-
-        let pass;
-        if (!live(r)) {
-            pass = true;
-        } else if (r.id === 25) {
-            pass = rules.filter(x => x.id < 25).every(x => !live(x) || x.check(w));
-        } else {
-            try { pass = r.check(w); } catch(_) { pass = false; }
-        }
-
-        const badge = el.querySelector('.rule-status');
-        el.classList.toggle('passed', pass);
-        el.classList.toggle('failed', !pass);
-        badge.textContent = pass ? (live(r) ? '✓ SATISFIED' : '✓ SUPERSEDED') : '✗ NOT MET';
-        if (pass) ok++;
-    });
-
-;
-    if (shown < rules.length) {
-        const allPass = rules.slice(0, shown).every(r => !live(r) || (() => {
-            try { return r.check(w); } catch(_) { return false; }
-        })());
-        if (allPass) { shown++; run(); return; }
+    for (let i = 0; i < task.rules.length; i++) {
+      const rule = task.rules[i];
+      const el = document.getElementById(`rule-${i}`);
+      let pass;
+      try { pass = rule.validate(vars); } catch { pass = false; }
+      el.classList.toggle("passed", pass);
+      el.classList.toggle("failed", !pass);
+      el.querySelector(".rule-status").textContent = pass ? "✓ SATISFIED" : "✗ NOT MET";
+      if (pass) ok++;
     }
+    progressEl.textContent = `TASK · ${ok} / ${task.rules.length}`;
+    if (ok === task.rules.length) win(vars);
+  }
 
-    progress.textContent = ok + ' / ' + rules.length;
-    if (shown === rules.length && rules.every(r => !live(r) || r.check(w))) win();
-}
-
-function win() {
+  function win(vars) {
     dead = true;
-    clearInterval(tick);
-    clearInterval(shred);
-    shred = null;
-    editor.classList.remove('destroying');
-    winScreen && winScreen.classList.remove('hidden');
-}
+    clearInterval(tick); clearInterval(shred); shred = null;
+    editor.classList.remove("destroying");
+    const elapsedMs = Date.now() - startedAt;
 
+    if (mode === "multiplayer") {
+      FirebaseClient.submitRaceSolution(currentRoomCode, PlayerState.getNickname(), elapsedMs);
+      // room listener's winnerUid callback (see subscribeToRoom) shows the
+      // success/defeat screen once the Firestore transaction settles
+    } else {
+      bumpDailyStreak();
+      const streak = PlayerState.getStreakCache();
+      streak.win = hadShred ? 0 : streak.win + 1;
+      PlayerState.setStreakCache(streak);
+      FirebaseClient.submitScore({ difficulty, elapsedMs, nickname: PlayerState.getNickname() }).catch(() => {});
+      FirebaseClient.updateStreaks({ nickname: PlayerState.getNickname(), daily: streak.daily, win: streak.win }).catch(() => {});
+      showSuccess({ won: true, elapsedMs, isMultiplayer: false });
+    }
+  }
 
-function drawTimer() {
+  function showSuccess({ won, elapsedMs, isMultiplayer, opponentName }) {
+    const screen = document.getElementById("success-screen");
+    const title = screen.querySelector(".success-title");
+    const label = screen.querySelector(".success-label");
+    const msg = document.getElementById("success-msg");
+    title.textContent = won ? "TASK CLEARED" : "TOO SLOW";
+    label.textContent = won ? "SUCCESS" : "DEFEAT";
+    label.style.color = won ? "var(--green)" : "var(--red)";
+    msg.textContent = won
+      ? "Rules satisfied. The script compiles."
+      : `${opponentName || "An opponent"} synced first this round.`;
+    document.getElementById("stat-time").textContent = (elapsedMs / 1000).toFixed(1) + "s";
+    document.getElementById("stat-streak").textContent = PlayerState.getStreakCache().win;
+    document.getElementById("stat-diff").textContent = difficulty.toUpperCase();
+    document.getElementById("next-task-btn").classList.toggle("hidden", isMultiplayer);
+    screen.classList.remove("hidden");
+  }
+
+  function drawTimer() {
     timerEl.textContent = secs;
-    timerEl.classList.toggle('urgent', secs <= 15);
-}
-
-function startShredding() {
+    timerEl.classList.toggle("urgent", secs <= 15);
+  }
+  function startShredding() {
     if (shred || dead) return;
-    editor.classList.add('destroying');
+    hadShred = true;
+    editor.classList.add("destroying");
     shred = setInterval(() => {
-        const lines = editor.value.split('\n');
-        editor.value = lines.length > 1 ? lines.slice(0, -1).join('\n') : '';
-        updateLines();
-        run();
+      const lines = editor.value.split("\n");
+      editor.value = lines.length > 1 ? lines.slice(0, -1).join("\n") : "";
+      updateLines(); run();
     }, 1000);
-}
-
-function save() {
+  }
+  function save() {
     if (dead) return;
     secs = 45;
     clearInterval(shred); shred = null;
-    editor.classList.remove('destroying');
-    saveBtn.classList.add('flash');
-    setTimeout(() => saveBtn.classList.remove('flash'), 300);
+    editor.classList.remove("destroying");
+    saveBtn.classList.add("flash");
+    setTimeout(() => saveBtn.classList.remove("flash"), 300);
     drawTimer();
-}
+  }
 
-tick = setInterval(() => {
-    if (dead) return;
-    if (--secs <= 0) { secs = 0; startShredding(); }
-    drawTimer();
-}, 1000);
+  function startGame(diff, gameMode, presetTask) {
+    difficulty = diff; mode = gameMode;
+    task = presetTask || TaskEngine.generateTask(diff);
+    dead = false; hadShred = false; secs = 45; startedAt = Date.now();
+    editor.value = "";
+    modeLabel.textContent = `${gameMode === "singleplayer" ? "SINGLEPLAYER" : "RACE"} · ${diff.toUpperCase()}`;
+    document.getElementById("opponents-strip").classList.toggle("hidden", gameMode !== "multiplayer");
+    buildRulesUI(); updateLines(); drawTimer();
+    clearInterval(tick);
+    tick = setInterval(() => {
+      if (dead) return;
+      if (--secs <= 0) { secs = 0; startShredding(); }
+      drawTimer();
+    }, 1000);
+    showScreen("game");
+  }
+  function teardownGame() {
+    clearInterval(tick); clearInterval(shred); tick = shred = null;
+    if (currentRoomCode) FirebaseClient.leaveRoom(currentRoomCode);
+    roomUnsubscribers.forEach((u) => u());
+    roomUnsubscribers = [];
+    currentRoomCode = null;
+    task = null;
+  }
 
-
-editor.addEventListener('input',  () => { updateLines(); run(); });
-editor.addEventListener('scroll', () => { lineNums.scrollTop = editor.scrollTop; });
-editor.addEventListener('keydown', e => {
-    if (e.key !== 'Tab') return;
+  editor.addEventListener("input", () => { updateLines(); run(); });
+  editor.addEventListener("scroll", () => { lineNums.scrollTop = editor.scrollTop; });
+  editor.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
     e.preventDefault();
     const s = editor.selectionStart;
-    editor.value = editor.value.slice(0, s) + '    ' + editor.value.slice(editor.selectionEnd);
+    editor.value = editor.value.slice(0, s) + "    " + editor.value.slice(editor.selectionEnd);
     editor.selectionStart = editor.selectionEnd = s + 4;
     updateLines(); run();
-});
-saveBtn.addEventListener('click', save);
+  });
+  saveBtn.addEventListener("click", save);
+  document.getElementById("next-task-btn").addEventListener("click", () => startGame(difficulty, mode));
 
-buildRules(); updateLines(); drawTimer(); run();
-
+  init();
 })();
