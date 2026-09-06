@@ -11,7 +11,6 @@
 
   <p>
     <a href="https://jamallyemin.github.io/The-Variable-Game/">Play it live</a> ·
-    <a href="https://github.com/jamallyemin/The-Variable-Game">Source</a>
   </p>
 </div>
 
