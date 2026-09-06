@@ -205,6 +205,8 @@
     try {
       const roomData = await FirebaseClient.joinRoom(code, PlayerState.getNickname());
       currentRoomCode = code;
+      document.getElementById("join-code-input").disabled = true;
+      document.getElementById("join-submit-btn").classList.add("hidden");
       subscribeToRoom(code, roomData.difficulty);
     } catch (err) {
       errEl.textContent = err.message || "Couldn't join that room.";
@@ -388,6 +390,13 @@
     roomUnsubscribers = [];
     currentRoomCode = null;
     task = null;
+
+    const joinInput = document.getElementById("join-code-input");
+    joinInput.disabled = false;
+    joinInput.value = "";
+    document.getElementById("join-submit-btn").classList.remove("hidden");
+    document.getElementById("join-waiting").classList.add("hidden");
+    document.getElementById("join-error").textContent = "";
   }
 
   editor.addEventListener("input", () => { updateLines(); run(); });
