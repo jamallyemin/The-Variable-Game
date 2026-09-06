@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width", initial-scale="1.0">
+        <title>THE VARIABLE GAME</title>
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <div class="crt-overlay" aria-hidden="true"></div>
+        <canvas id="grain-canvas" aria-hidden="true"></canvas>
+
+        <div class="app-wrapper">
+            <header class="game-header">
+                <div class="header-left">
+                    <span class="game-title" id="logo-home-btn">THE VARIABLE GAME</span>
+                    <span class="game subtitle">// endless python puzzles</span>
+                </div>
+                <div class="header-right">
+                    <div class="streak-chip" id="streak-chip"><span class="flame">▲</span><span id="streak-count">0</span> day streak</div>
+                    <div class="identity-badge">
+                        <span class="nickname" id="nickname-display">GUEST</span>
+                        <button class="btn small" id="change-nickname-btn">EDIT</button>
+                    </div>
+                </div>
+            </header>
+            <div class="screen" id="screen-container">
+                <!--main menu-->
+                <section class="menu-screen" id="screen-menu">
+                   <div class="menu-ascii">
+                    ┌────────────────────────────┐
+                    │  &gt; variable game runtime      │
+                    │  &gt; status: online             │
+                    └────────────────────────────┘</div>
+                    <div>
+                        <div class="menu-heading">MAIN MENU</div>
+                        <div class="menu-tagline">choose a mode</div>
+                    </div>
+                    <div class="menu-options">
+                        <button class="btn primary" data-action="singleplayer">SINGLEPLAYER <span class="key-hint">[1]</span></button>
+                        <button class="btn" data-action="host">HOST A ROOM <span class="key-hint">[2]</span></button>
+                        <button class="btn" data-action="join">JOIN A ROOM <span class="key-hint">[3]</span></button>
+                        <button class="btn" data-action="leaderboard">LEADERBOARD <span class="key-hint">[4]</span></button>
+                    </div>
+                    <div class="menu-footer-links">
+                        <span data-action="tutorial">HOW TO PLAY</span>
+                        <a href="https://github.com/jamallyemin/The-Variable-Game" target="_blank" rel="noopener">SOURCE</a>
+                    </div>
+                </section>
+                
+                <!-- select diifculty-->
+                 <section class="difficulty-screen hidden" id="screen-difficulty">
+                    <div class="menu-heading" style="font-size: 28px;">SELECT DIFFICULTY</div>
+                    <div class="difficulty-cards">
+                        <div class="diff-card" data-diff="easy">
+                            <div class="diff-name">EASY</div>
+                            <div class="diff-desc">1 rule per task. Good for warming up your fingers.</div>
+                            <div class="diff-meta">~2 variables</div>
+                        </div>
+                        <div class="diff-card" data-diff="medium">
+                            <div class="diff-name">MEDIUM</div>
+                            <div class="diff-desc">3 combined rules. You'll need to think ahead a little.</div>
+                            <div class="diff-meta">~3-4 variables</div>
+                        </div>
+                        <div class="diff-card" data-diff="hard">
+                            <div class="diff-name">HARD</div>
+                            <div class="diff-desc">5 interlocking rules. Nothing repeats — nothing is safe.</div>
+                            <div class="diff-meta">~5-6 variables</div>
+                        </div>
+                    </div>
+                    <button class="btn" data-action="back-to-menu">[ BACK ]</button>
+                 </section>
+
+                 <!--host room-->
+                 <section class="lobby-screen hidden" id="screen-host">
+                    <div class="lobby-box">
+                        <h2>HOST A ROOM</h2>
+                        <div id="host-pre-code">
+                            <p style="font-size: 12px;color: var(--text-dim);margin-bottom: 14px;">Pick a difficulty, then share a room code with your friends.</p>
+                            <div class="difficulty-cards" style="margin-bottom: 16px;">
+                                <div class="diff-card" data-diff="easy" style="width:auto;flex:1;padding:12px;"><div class="diff-name" style="font-size:18px;">EASY</div></div>
+                                <div class="diff-card" data-diff="medium" style="width:auto;flex:1;padding:12px;"><div class="diff-name" style="font-size:18px;">MEDIUM</div></div>
+                                <div class="diff-card" data-diff="hard" style="width:auto;flex:1;padding:12px;"><div class="diff-name" style="font-size:18px;">HARD</div></div>
+                            </div>
+                        </div>
+                        <div id="host-post-code" class="hidden">
+                            <div class="room-code-display" id="room-code-value">— — — —</div>
+                            <ul class="player-list" id="host-player-list"></ul>
+                            <div class="lobby-actions">
+                                <button class="btn primary" id="start-race-btn" disabled>[ START RACE ]</button>
+                                <button class="btn danger" data-action="back-to-menu">[ CANCEL ]</button>
+                            </div>
+                        </div>
+                    </div>
+                 </section>
+                 <!--join lobby-->
+                 <section class="lobby-screen hidden" id="screen-join">
+                    <div class="lobby-box">
+                        <h2>JOIN A ROOM</h2>
+                        <input class="lobby-input" id="join-code-input" placeholder="ROOM CODE" maxlength="4" style="text-transform: uppercase;" />
+                        <div class="error-text" id="join-error"></div>
+                        <div id="join-waiting" class="hidden">
+                            <ul class="player-list" id="join-player-list"></ul>
+                            <p style="font-size: 11px;color: var(--text-muted);">waiting for host to start...</p>
+                        </div>
+                        <div class="lobby-actions">
+                            <button class="btn primary" id="join-submit-btn">[ JOIN ]</button>
+                            <button class="btn danger" data-action="back-to-menu">[ CANCEL ]</button>
+                        </div>
+                    </div>
+                 </section>
+                 <!--leaderboard-->
+                 <section class="leaderboard-screen hidden" id="screen-leaderboard">
+                    <div class="lb-tabs">
+                      <div class="lb-tab active" data-lbtab="easy">EASY</div>
+                      <div class="lb-tab" data-lbtab="medium">MEDIUM</div>
+                      <div class="lb-tab" data-lbtab="hard">HARD</div>
+                      <div class="lb-tab" data-lbtab="streak">STREAKS</div>
+                    </div>
+                    <table class="lb-table">
+                        <thead><tr><th>#</th><th>PLAYER</th><th>WINS</th><th>BEST TIME</th><th>WIN STREAK</th></tr></thead>
+                        <tbody id="lb-body"><tr><td colspan="5" style="color:var(--text-muted);">loading — connect a backend to populate this</td></tr></tbody>
+                    </table>
+                    <button class="btn" style="margin-top: 20px;" data-action="back-to-menu">[ BACK ]</button>
+                 </section>
+
+                 <!--game screen-->
+                 <section class="hidden" id="screen-game">
+                    <div class="game-body">
+                        <aside class="rules-panel" id="rules-panel">
+                            <div class="rules-header">
+                                <span class="rules-title" id="game-mode-label">SINGLEPLAYER · EASY</span>
+                                <span id="rules-progress" class="rules-progress">TASK 1</span>
+                            </div>
+                            <ul class="rules-list" id="rules-list"></ul>
+                            <div class="opponents-strip hidden" id="opponents-strip"></div>
+                        </aside>
+                        <main class="editor-panel">
+                            <div class="editor-topbar">
+                                <span class="editor-label">script.py</span>
+                                <div class="save-section">
+                                    <div class="timer-wrap">
+                                        <span class="timer-label">MEMORY SYNC</span>
+                                        <span id="timer-display" class="timer-value">45</span>
+                                        <span class="timer-unit">s</span>
+                                    </div>
+                                    <button id="save-btn" class="btn small">SYNC MEMORY</button>
+                                </div>
+                            </div>
+                            <div class="editor-container">
+                                <div id="line-numbers" class="line-numbers">1</div>
+                                <textarea id="code-editor" class="code-editor" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="# start writing your python script here..."></textarea>
+                            </div>
+                        </main>
+                    </div>
+                 </section>
+
+            </div>
+        </div>
+        <!--success screen-->
+        <div id="success-screen" class="success-screen hidden">
+            <div class="success-inner">
+                <div class="success-blink">•‿•</div>
+                <h1 class="success-title">TASK CLEARED</h1>
+                <div class="success-divider"></div>
+                <p class="success-label">SUCCESS</p>
+                <div class="success-stats">
+                    <div><b id="stat-time">00:00</b> TIME</div>
+                    <div><b id="stat-streak">0</b> WIN STREAK</div>
+                    <div><b id="stat-diff">EASY</b> DIFFICULTY</div>
+                </div>
+                <p class="success-msg" id="success-msg">Rules satisfied. The script compiles.</p>
+                <div class="success-actions">
+                    <button class="btn primary" id="next-task-btn">[ NEXT TASK ]</button>
+                    <button class="btn" data-action="back-to-menu">[ MAIN MENU ]</button>
+                </div>
+            </div>
+        </div>
+        <!--first visit tut-->
+        <div id="tutorial-prompt" class="modal-backdrop hidden">
+            <div class="modal-box">
+                <h2>FIRST TIME HERE?</h2>
+                <p>Take a 60-second walkthrough of the interface, or jump straight in — you can replay this anytime from "HOW TO PLAY".</p>
+                <div class="modal-actions">
+                    <button class="btn primary" id="start-tutorial-btn">[ PLAY TUTORIAL ]</button>
+                    <button class="btn" id="skip-tutorial-btn">[ SKIP ]</button>
+                </div>
+            </div>
+        </div>
+        <!--first visit nickname p-->
+        <div id="nickname-prompt" class="modal-backdrop hidden">
+            <div class="modal-box">
+                <h2>PICK A CALLSIGN</h2>
+                <p>This is your public name on the leaderboard. Keep it clean — it's checked before it's saved.</p>
+                <input class="lobby-input" id="nickname-input" maxlength="16" placeholder="e.g. DUCK_LORD" />
+                <div class="error-text" id="nickname-error"></div>
+                <div class="modal-actions">
+                    <button class="btn primary" id="confirm-nickname-btn">[ CONFIRM ]</button>
+                </div>
+            </div>
+        </div>
+        <!--tut spotlight overlay-->
+        <div id="tutorial-overlay" class="tutorial-overlay hidden"></div>
+        <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+        <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+        <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+        <script src="taskEngine.js"></script>
+        <script src="parser.js"></script>
+        <script src="config.js"></script>
+        <script src="firebaseclient.js"></script>
+        <script src="tutorial.js"></script>
+        <script src="script.js"></script>
+    </body>
+</html>
